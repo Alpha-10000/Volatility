@@ -51,19 +51,22 @@ class SymbolsScanner(scan.BaseScanner):
 
 class GenLinuxProfile(commands.Command):
     patterns = ["init_task"]
-    start = 0
+    start = 0x0
     scan_size = 0x10000000
+    symtab_size = 0x100000
 
     def calculate(self):
         address_space = utils.load_as(self._config, astype='physical')
         scanner = SymbolsScanner(self.patterns)
+
         for address in scanner.scan(address_space, self.start, self.scan_size):
             offset = str(address_space.zread(address, STEP)).find(self.patterns[0])
-            result = address_space.zread(address + offset, 90000)
-            yield result
+            result = str(address_space.zread(address + offset, self.symtab_size))
+            symbols  = result[:result.find("\0\0")].split('\0')
+            for symbol in symbols:
+                yield symbol
 
 
     def render_text(self, outfd, data):
         for found in data:
-            print("==== Found Stuff ====\n")
             outfd.write(str(found) + '\n')
