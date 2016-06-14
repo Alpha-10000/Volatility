@@ -71,6 +71,7 @@ class GenLinuxProfile(commands.Command):
 
             syms_scan = SymbolsScanner(self.separators, 1)
             yield syms_start, self.patterns[0]
+
             for sym_addr in syms_scan.scan(address_space, syms_start, syms_end):
                 symbols_end = syms_strings[(sym_addr - syms_start) + 1:]
                 sym_string = symbols_end[:symbols_end.find('\0')]
@@ -78,9 +79,18 @@ class GenLinuxProfile(commands.Command):
                 yield sym_addr, sym_string
             break #TODO: choose best candidate
 
+    def generator(self, data):
+        for address, name in data:
+            yield (0, [Address(address), str(name)])
+
+    def unified_output(self, data):
+        return TreeGrid([("Address", Address),
+                         "Name", str],
+                        self.generator(data))
 
     def render_text(self, outfd, data):
-        outfd.write("==== Symbols table ====\n")
-        for addr, string in data:
-            outfd.write(hex(addr) + " " + string + "\n")
-            pass
+        self.table_header(outfd, [("Address", "16"),
+                                  ("Symbol", "24")])
+
+        for addr, name in data:
+            self.table_row(outfd, hex(addr + 0xC0000000), name)
