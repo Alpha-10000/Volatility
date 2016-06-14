@@ -25,48 +25,62 @@ import volatility.scan as scan
 
 from volatility.renderers import TreeGrid
 from volatility.renderers.basic import Address, Hex
-
-STEP = 4096
+from volatility import debug
 
 class SymbolsCheck(scan.ScannerCheck):
 
-    def __init__(self, address_space, patterns):
+    def __init__(self, address_space, patterns, step):
         super(SymbolsCheck, self).__init__(address_space)
         self.patterns = patterns
+        self.step = step
 
     def check(self, _offset):
         for pattern in self.patterns:
-            if pattern in str(self.address_space.zread(_offset, STEP)):
+            if pattern in str(self.address_space.zread(_offset, self.step)):
                 return True
 
         return False
 
     def skip(self, data, offset):
-        return STEP
+        return self.step
 
 class SymbolsScanner(scan.BaseScanner):
-    def __init__(self, patterns):
+    def __init__(self, patterns, step):
         super(SymbolsScanner, self).__init__()
-        self.checks = [("SymbolsCheck", {'patterns': patterns })]
+        self.checks = [("SymbolsCheck", {'patterns': patterns, 'step': step})]
 
 class GenLinuxProfile(commands.Command):
-    patterns = ["init_task"]
-    start = 0x0
+    scan_start = 0x0
     scan_size = 0x10000000
     symtab_size = 0x100000
+    step = 1000
+
+    patterns = ["init_task"]
+    separators = ["\0", "\0\0"]
 
     def calculate(self):
         address_space = utils.load_as(self._config, astype='physical')
-        scanner = SymbolsScanner(self.patterns)
+        scanner = SymbolsScanner(self.patterns, self.step)
 
-        for address in scanner.scan(address_space, self.start, self.scan_size):
-            offset = str(address_space.zread(address, STEP)).find(self.patterns[0])
-            result = str(address_space.zread(address + offset, self.symtab_size))
-            symbols  = result[:result.find("\0\0")].split('\0')
-            for symbol in symbols:
-                yield symbol
+        for address in scanner.scan(address_space, self.scan_start, self.scan_size):
+
+            syms_offset = str(address_space.zread(address, self.step)).find(self.patterns[0])
+            syms_start = address + syms_offset
+            syms_strings = str(address_space.zread(syms_start, self.symtab_size))
+            syms_end = syms_strings.find("\0\0")
+
+            syms_scan = SymbolsScanner(self.separators, 1)
+            yield syms_start, self.patterns[0]
+            for sym_addr in syms_scan.scan(address_space, syms_start, syms_end):
+                symbols_end = syms_strings[(sym_addr - syms_start) + 1:]
+                sym_string = symbols_end[:symbols_end.find('\0')]
+
+                yield sym_addr, sym_string
+            break #TODO: choose best candidate
 
 
     def render_text(self, outfd, data):
-        for found in data:
-            outfd.write(str(found) + '\n')
+        outfd.write("==== Symbols table ====\n")
+        for addr, string in data:
+            outfd.write(hex(addr) + " " + string + "\n")
+            pass
