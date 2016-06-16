@@ -54,14 +54,16 @@ class GenLinuxProfile(commands.Command):
     scan_size = 0x10000000
     symtab_size = 0x100000
     step = 1000
+    vaddr = 0xC0000000
 
     patterns = ["init_task"]
     separators = ["\0", "\0\0"]
+    unknown_type = "?"
 
     def calculate(self):
         address_space = utils.load_as(self._config, astype='physical')
-        scanner = SymbolsScanner(self.patterns, self.step)
 
+        scanner = SymbolsScanner(self.patterns, self.step)
         for address in scanner.scan(address_space, self.scan_start, self.scan_size):
 
             syms_offset = str(address_space.zread(address, self.step)).find(self.patterns[0])
@@ -70,27 +72,30 @@ class GenLinuxProfile(commands.Command):
             syms_end = syms_strings.find("\0\0")
 
             syms_scan = SymbolsScanner(self.separators, 1)
-            yield syms_start, self.patterns[0]
+            yield self.vaddr + syms_start, self.unknown_type, self.patterns[0]
 
             for sym_addr in syms_scan.scan(address_space, syms_start, syms_end):
                 symbols_end = syms_strings[(sym_addr - syms_start) + 1:]
                 sym_string = symbols_end[:symbols_end.find('\0')]
 
-                yield sym_addr, sym_string
+                yield self.vaddr + sym_addr, self.unknown_type, sym_string
             break #TODO: choose best candidate
 
     def generator(self, data):
-        for address, name in data:
-            yield (0, [Address(address), str(name)])
+        for address, sym_type, name in data:
+            yield (0, [Address(address), str(sym_type), str(name)])
 
     def unified_output(self, data):
         return TreeGrid([("Address", Address),
-                         "Name", str],
+                         ("Type", str),
+                         ("Name", str)],
                         self.generator(data))
 
     def render_text(self, outfd, data):
-        self.table_header(outfd, [("Address", "16"),
+        self.table_header(outfd, [("Address", "12"),
+                                  ("Type", "5"),
                                   ("Symbol", "24")])
 
-        for addr, name in data:
-            self.table_row(outfd, hex(addr + 0xC0000000), name)
+        for addr, sym_type, name in data:
+            self.table_row(outfd, hex(addr)[2:], sym_type, name)
+            pass
