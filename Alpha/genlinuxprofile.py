@@ -110,7 +110,20 @@ class GenLinuxProfile(commands.Command):
                          ("Name", str)],
                         self.generator(data))
 
+    def generate_file(self, data):
+        map_file_name = "System.map-unknown.version-generic"
+        map_file = open(map_file_name, "w+")
+        for address, sym_type, name in data:
+            map_file.write(hex(address)[2:len(str(address))-2])
+            map_file.write(" ")
+            map_file.write(sym_type)
+            map_file.write(" ")
+            map_file.write(name)
+            map_file.write("\n")
+        map_file.close()
+
     def render_text(self, outfd, data):
+        #self.generate_file(data)
         self.table_header(outfd, [("Address", "24"),
                                   ("Type", "5"),
                                   ("Symbol", "32")])
