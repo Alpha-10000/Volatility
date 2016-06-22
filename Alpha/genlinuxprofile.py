@@ -22,6 +22,7 @@
 import volatility.utils as utils
 import volatility.commands as commands
 import volatility.scan as scan
+import string
 
 from volatility.renderers import TreeGrid
 from volatility.renderers.basic import Address, Hex
@@ -56,9 +57,7 @@ class GenLinuxProfile(commands.Command):
     step = 1000
     
     vaddr = 0x0
-
     patterns = ["init_task"]
-    separators = ["\0", "\0\0"]
     unknown_type = "?"
 
     def calculate(self):
@@ -67,19 +66,29 @@ class GenLinuxProfile(commands.Command):
         self.checkArch(address_space)
         scanner = SymbolsScanner(self.patterns, self.step)
         for address in scanner.scan(address_space, self.scan_start, self.scan_size):
-            
             syms_offset = str(address_space.zread(address, self.step)).find(self.patterns[0])
             syms_start = address + syms_offset
             syms_strings = str(address_space.zread(syms_start, self.symtab_size))
-            syms_end = syms_strings.find("\0\0")
 
-            syms_scan = SymbolsScanner(self.separators, 1)
+            symbols_format = string.ascii_letters + string.digits + "_"
+            syms_end = False
+
+            syms_scan = SymbolsScanner(["\0"], 1)
             yield self.vaddr + syms_start, self.unknown_type, self.patterns[0]
 
-            for sym_addr in syms_scan.scan(address_space, syms_start, syms_end):
+            for sym_addr in syms_scan.scan(address_space, syms_start, self.symtab_size):
                 symbols_end = syms_strings[(sym_addr - syms_start) + 1:]
-                sym_string = symbols_end[:symbols_end.find('\0')]
 
+                sym_string = symbols_end[:symbols_end.find('\0')]
+                if sym_string == "":
+                    syms_end = True
+                for c in sym_string:
+                    if c not in symbols_format:
+                        syms_end = True
+                        break
+
+                if syms_end:
+                    break
                 yield self.vaddr + sym_addr, self.unknown_type, sym_string
             break #TODO: choose best candidate
 
@@ -99,7 +108,8 @@ class GenLinuxProfile(commands.Command):
         for found in scanner.scan(address_space, self.scan_start, self.scan_size):
             bin_x86 += 1
 
-        self.vaddr = 0xC0000000 if bin_x86 > bin_x86_64 else 0xffffff8000000000
+        self.vaddr = 0xffffff8000000000 if bin_x86_64 > bin_x86 else 0xC0000000
+
     def generator(self, data):
         for address, sym_type, name in data:
             yield (0, [Address(address), str(sym_type), str(name)])
@@ -114,7 +124,10 @@ class GenLinuxProfile(commands.Command):
         map_file_name = "System.map-unknown.version-generic"
         map_file = open(map_file_name, "w+")
         for address, sym_type, name in data:
-            map_file.write(hex(address)[2:len(str(address))-2])
+            addr = hex(address)[2:len(str(address))-2]
+            if self.vaddr == 0xC0000000:
+                addr = hex(address)[2:]
+            map_file.write(addr)
             map_file.write(" ")
             map_file.write(sym_type)
             map_file.write(" ")
