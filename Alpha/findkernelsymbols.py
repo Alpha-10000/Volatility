@@ -16,7 +16,6 @@
 @author:       Alpha Abdoulaye
 @license:      GNU General Public License 2.0
 @contact:      alpha@lse.epita.fr
-@organization: LSE (lse.epita.fr)
 """
 
 import volatility.utils as utils
@@ -50,7 +49,7 @@ class SymbolsScanner(scan.BaseScanner):
         super(SymbolsScanner, self).__init__()
         self.checks = [("SymbolsCheck", {'patterns': patterns, 'step': step})]
 
-class GenLinuxProfile(commands.Command):
+class FindKernelSymbols(commands.Command):
     scan_start = 0x0
     scan_size = 0x10000000
     symtab_size = 0x100000
@@ -120,13 +119,17 @@ class GenLinuxProfile(commands.Command):
                          ("Name", str)],
                         self.generator(data))
 
+    def format_address(self, address):
+        addr = hex(address)[2:]
+        if self.vaddr != 0xC0000000:
+            addr = addr[:len(str(addr))-2]
+        return addr
+
     def generate_file(self, data):
         map_file_name = "System.map-unknown.version-generic"
         map_file = open(map_file_name, "w+")
         for address, sym_type, name in data:
-            addr = hex(address)[2:len(str(address))-2]
-            if self.vaddr == 0xC0000000:
-                addr = hex(address)[2:]
+            addr = self.format_address(address)
             map_file.write(addr)
             map_file.write(" ")
             map_file.write(sym_type)
@@ -136,10 +139,14 @@ class GenLinuxProfile(commands.Command):
         map_file.close()
 
     def render_text(self, outfd, data):
-        #self.generate_file(data)
-        self.table_header(outfd, [("Address", "24"),
+        print("Generating Symbols table...")
+
+        ## Uncomment to generate System.map file
+        ## self.generate_file(data)
+
+        self.table_header(outfd, [("Address", "20"),
                                   ("Type", "5"),
                                   ("Symbol", "32")])
         for addr, sym_type, name in data:
-            self.table_row(outfd, hex(addr), sym_type, name)
+            self.table_row(outfd, self.format_address(addr), sym_type, name)
 
