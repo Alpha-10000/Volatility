@@ -107,8 +107,7 @@ class FindKernelSymbols(commands.Command):
         for found in scanner.scan(address_space, self.scan_start, self.scan_size):
             bin_x86 += 1
 
-        self.vaddr = 0xffffff8000000000 if bin_x86_64 > bin_x86 else 0xC0000000
-
+        self.vaddr = 0xffffffff80000000 if bin_x86_64 > bin_x86 else 0xC0000000
     def generator(self, data):
         for address, sym_type, name in data:
             yield (0, [Address(address), str(sym_type), str(name)])
@@ -122,7 +121,7 @@ class FindKernelSymbols(commands.Command):
     def format_address(self, address):
         addr = hex(address)[2:]
         if self.vaddr != 0xC0000000:
-            addr = addr[:len(str(addr))-2]
+            addr = addr[:len(str(addr))-1]
         return addr
 
     def generate_file(self, data):
@@ -142,7 +141,7 @@ class FindKernelSymbols(commands.Command):
         print("Generating Symbols table...")
 
         ## Uncomment to generate System.map file
-        ## self.generate_file(data)
+        # self.generate_file(data)
 
         self.table_header(outfd, [("Address", "20"),
                                   ("Type", "5"),
