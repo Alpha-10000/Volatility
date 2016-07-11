@@ -53,48 +53,61 @@ class FindKernelSymbols(commands.Command):
     scan_start = 0x0
     scan_size = 0x10000000
     symtab_size = 0x100000
-    step = 1000
+    step = 100
     
     vaddr = 0x0
-    patterns = ["init_task"]
+    vabase_x86 = 0xC0000000
+    vabase_x86_64 = 0xffffffff80000000
+    header = False
+    patterns = ["init_task", ("swapper" + "\x00" * 4)]
     unknown_type = "?"
 
+    swapper_pg_dir = 0x0
+    
     def calculate(self):
         address_space = utils.load_as(self._config, astype='physical')
-
         self.checkArch(address_space)
+            
         scanner = SymbolsScanner(self.patterns, self.step)
+        syms_end = False
         for address in scanner.scan(address_space, self.scan_start, self.scan_size):
-            syms_offset = str(address_space.zread(address, self.step)).find(self.patterns[0])
-            syms_start = address + syms_offset
-            syms_strings = str(address_space.zread(syms_start, self.symtab_size))
+            for pattern in self.patterns:
+                syms_offset = str(address_space.zread(address, self.step)).find(pattern)
+                if syms_offset == -1:
+                    continue
+                syms_start = address + syms_offset
 
-            symbols_format = string.ascii_letters + string.digits + "_"
-            syms_end = False
+                if pattern == self.patterns[1]:
+                    if self.swapper_pg_dir == 0x0:
+                        self.swapper_pg_dir = self.vaddr + syms_start
+                else:
+                    if syms_end:
+                        break #TODO: choose best candidate
+                    syms_strings = str(address_space.zread(syms_start, self.symtab_size))
 
-            syms_scan = SymbolsScanner(["\0"], 1)
-            yield self.vaddr + syms_start, self.unknown_type, self.patterns[0]
+                    symbols_format = string.ascii_letters + string.digits + "_"
 
-            for sym_addr in syms_scan.scan(address_space, syms_start, self.symtab_size):
-                symbols_end = syms_strings[(sym_addr - syms_start) + 1:]
+                    syms_scan = SymbolsScanner(["\0"], 1)
+                    yield self.vaddr + syms_start, self.unknown_type, self.patterns[0]
+            
+                    for sym_addr in syms_scan.scan(address_space, syms_start, self.symtab_size):
+                        symbols_end = syms_strings[(sym_addr - syms_start) + 1:]
 
-                sym_string = symbols_end[:symbols_end.find('\0')]
-                if sym_string == "":
-                    syms_end = True
-                for c in sym_string:
-                    if c not in symbols_format:
-                        syms_end = True
-                        break
-
-                if syms_end:
-                    break
-                yield self.vaddr + sym_addr, self.unknown_type, sym_string
-            break #TODO: choose best candidate
+                        sym_string = symbols_end[:symbols_end.find('\0')]
+                        if sym_string == "":
+                            syms_end = True
+                        for c in sym_string:
+                            if c not in symbols_format:
+                                syms_end = True
+                                break
+                        if syms_end:
+                            break
+                        yield self.vaddr + sym_addr, self.unknown_type, sym_string
 
     def checkArch(self, address_space):
         magic_32 = ["\x7F\x45\x4C\x46\x01"]
         magic_64 = ["\x7F\x45\x4C\x46\x02"]
-        elf_step = 100
+        elf_step = 20000
 
         bin_x86 = 0
         bin_x86_64 = 0
@@ -107,7 +120,8 @@ class FindKernelSymbols(commands.Command):
         for found in scanner.scan(address_space, self.scan_start, self.scan_size):
             bin_x86 += 1
 
-        self.vaddr = 0xffffffff80000000 if bin_x86_64 > bin_x86 else 0xC0000000
+        self.vaddr = self.vabase_x86_64 if bin_x86_64 > bin_x86 else self.vabase_x86
+
     def generator(self, data):
         for address, sym_type, name in data:
             yield (0, [Address(address), str(sym_type), str(name)])
@@ -118,34 +132,55 @@ class FindKernelSymbols(commands.Command):
                          ("Name", str)],
                         self.generator(data))
 
-    def format_address(self, address):
+    def fmt(self, address):
         addr = hex(address)[2:]
-        if self.vaddr != 0xC0000000:
-            addr = addr[:len(str(addr))-1]
+        if self.vaddr != self.vabase_x86:
+            addr = addr[:len(addr)-1]
         return addr
 
-    def generate_file(self, data):
-        map_file_name = "System.map-unknown.version-generic"
-        map_file = open(map_file_name, "w+")
-        for address, sym_type, name in data:
-            addr = self.format_address(address)
-            map_file.write(addr)
-            map_file.write(" ")
-            map_file.write(sym_type)
-            map_file.write(" ")
-            map_file.write(name)
-            map_file.write("\n")
-        map_file.close()
+    def format_address(self, address):
+        return "0" * (len(self.fmt(self.vaddr)) - len(self.fmt(address))) + self.fmt(address)
+     
+    def output_line(self, outfd, outfile, address, symbol_type, name):
+        self.table_row(outfd, address, symbol_type, name)
 
+        outfile.write(address)
+        outfile.write(" ")
+        outfile.write(symbol_type)
+        outfile.write(" ")
+        outfile.write(name)
+        outfile.write("\n")
+        
+    def write_first_symbols(self, outfd, outfile):
+        init_sym = "A"
+        if self.vaddr == self.vabase_x86_64:
+            self.output_line(outfd, outfile, self.format_address(self.vaddr), self.unknown_type, "_stext")
+        else:
+            self.output_line(outfd, outfile, self.format_address(0x100000), init_sym, "phys_startup_32")
+            self.output_line(outfd, outfile, self.format_address(self.vaddr), "T", "_text")
+
+    def write_last_symbols(self, outfd, outfile):
+        init_sym = "B"
+        if self.vaddr == self.vabase_x86:
+            self.output_line(outfd, outfile, self.format_address(self.swapper_pg_dir), init_sym, "swapper_pg_dir")
+        else:
+            self.output_line(outfd, outfile, self.format_address(0xc03bc000), init_sym, "init_level4_pgt")
+    
     def render_text(self, outfd, data):
         print("Generating Symbols table...")
-
-        ## Uncomment to generate System.map file
-        # self.generate_file(data)
-
         self.table_header(outfd, [("Address", "20"),
                                   ("Type", "5"),
                                   ("Symbol", "32")])
-        for addr, sym_type, name in data:
-            self.table_row(outfd, self.format_address(addr), sym_type, name)
 
+        map_file_name = "System.map-unknown.version-generic"
+        map_file = open(map_file_name, "w+")
+
+        for address, sym_type, name in data:
+            if not self.header:
+                self.write_first_symbols(outfd, map_file)
+                self.header = True
+            self.output_line(outfd, map_file, self.format_address(address), sym_type, name)
+        self.write_last_symbols(outfd, map_file)
+
+        map_file.close()
+        print(" \n+++ Generated System.map file: " + map_file_name + " +++")
